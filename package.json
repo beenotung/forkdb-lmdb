@@ -12,15 +12,14 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "test": "npm run rawtest",
-    "clean": "rimraf node_modules/@beenotung/tslib/index.* dist",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "test": "mocha -r ts-node/register **/*.spec.ts",
+    "clean": "rimraf dist",
+    "format": "prettier --write \"src/**/*.ts\"",
     "postformat": "tslint -p . --fix",
     "prebuild": "npm run clean",
     "build": "tsc",
-    "pretest": "npm run format && npm run build",
-    "rawtest": "ts-node test/index.ts",
-    "prepublishOnly": "npm run rawtest && npm run build"
+    "pretest": "npm run format && npm run build && mkdir -p data",
+    "prepublishOnly": "npm run test"
   },
   "husky": {
     "hook": {
@@ -34,11 +33,16 @@
     "dist"
   ],
   "dependencies": {
-    "@beenotung/tslib": "^14.38.5"
+    "typestub-node-lmdb": "^0.1.1"
   },
   "devDependencies": {
+    "@types/chai": "^4.2.4",
+    "@types/mathjs": "^6.0.1",
+    "@types/mocha": "^5.2.7",
     "@types/node": "*",
+    "chai": "^4.2.0",
     "husky": "^3.0.9",
+    "mocha": "^6.1.4",
     "prettier": "^1.18.2",
     "rimraf": "^3.0.0",
     "ts-node": "^8.4.1",
