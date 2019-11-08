@@ -1,13 +1,15 @@
 {
   "name": "forkdb-lmdb",
-  "version": "1.0.0",
-  "description": "",
-  "keywords": [],
-  "author": {
-    "name": "Beeno Tung",
-    "email": "aabbcc1241@yahoo.com.hk",
-    "url": "https://beeno-tung.surge.sh"
-  },
+  "version": "0.1.0",
+  "description": "Object-prototype-like abstraction over lmdb.",
+  "keywords": [
+    "forkdb",
+    "lmdb",
+    "object prototype",
+    "extend",
+    "fork"
+  ],
+  "author": "Beeno Tung <aabbcc1241@yahoo.com.hk> (https://beeno-tung.surge.sh)",
   "license": "BSD-2-Clause",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -50,5 +52,13 @@
     "tslint-config-prettier": "^1.18.0",
     "tslint-eslint-rules": "^5.4.0",
     "typescript": "^3.7.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/beenotung/forkdb-lmdb.git"
+  },
+  "bugs": {
+    "url": "https://github.com/beenotung/forkdb-lmdb/issues"
+  },
+  "homepage": "https://github.com/beenotung/forkdb-lmdb#readme"
 }
