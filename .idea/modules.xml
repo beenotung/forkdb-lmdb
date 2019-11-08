@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/forkdb.iml" filepath="$PROJECT_DIR$/.idea/.idea/forkdb.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/forkdb-lmdb.iml" filepath="$PROJECT_DIR$/.idea/forkdb-lmdb.iml" />
     </modules>
   </component>
 </project>
