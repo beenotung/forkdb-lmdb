@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import 'mocha';
 import { newEnv } from 'typestub-node-lmdb';
-import { openForkDB } from './forkdb';
+import { openForkDB } from '../src/forkdb';
 
 // tslint:disable:no-unused-expression
 

@@ -11,4 +11,4 @@ When a value is being looked up,
 we first check if it's present in the current (child) state,
 if not, we'll lookup it in the parent state recursively.
 
-Examples refers to [forkdb.spec.ts](src/forkdb.spec.ts)
+Examples refers to [forkdb.spec.ts](test/forkdb.spec.ts)

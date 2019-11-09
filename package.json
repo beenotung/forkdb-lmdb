@@ -11,8 +11,8 @@
   ],
   "author": "Beeno Tung <aabbcc1241@yahoo.com.hk> (https://beeno-tung.surge.sh)",
   "license": "BSD-2-Clause",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/forkdb.js",
+  "types": "dist/forkdb.d.ts",
   "scripts": {
     "test": "mocha -r ts-node/register **/*.spec.ts",
     "clean": "rimraf dist",
