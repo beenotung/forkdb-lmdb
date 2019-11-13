@@ -88,6 +88,25 @@ describe('forkdb TestSuit', () => {
     txn.commit();
   });
 
+  it('should change between forks within the single transaction', () => {
+    const root = loadRoot();
+    const child = root.fork();
+    {
+      const txn = root.beginTxn();
+      txn.putString('WhoAmI', 'root');
+      txn.changeFork(child.forkId);
+      txn.putString('WhoAmI', 'child');
+      txn.commit();
+    }
+    {
+      const txn = root.beginTxn({ readOnly: true });
+      expect(txn.getString('WhoAmI')).equals('root');
+      txn.changeFork(child.forkId);
+      expect(txn.getString('WhoAmI')).equals('child');
+      txn.commit();
+    }
+  });
+
   it('should clear all forks without error', () => {
     clearAll();
   });

@@ -35,7 +35,7 @@
     "dist"
   ],
   "dependencies": {
-    "typestub-node-lmdb": "^0.1.1"
+    "typestub-node-lmdb": "^0.1.4"
   },
   "devDependencies": {
     "@types/chai": "^4.2.4",
