@@ -1,6 +1,7 @@
 
 codeStyles
 # Default ignored files
+emacs.xml
 vcs.xml
 workspace.xml
 /workspace.xmlcodeStyles

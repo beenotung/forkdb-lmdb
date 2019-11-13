@@ -11,7 +11,7 @@ type Fork = {
   childIDs: number[];
 };
 
-const forkIdToKey = (forkId: number) => 'fork:' + forkId;
+const forkIdToKey = (forkId: number) => 'fork' + ':' + forkId;
 
 export function openForkDB(env: OpenedEnv) {
   const forkDB = env.openDbi({
@@ -29,10 +29,10 @@ export function openForkDB(env: OpenedEnv) {
     txn.putObject(forkDB, key, fork);
   }
 
-  function fork(parentID: number, childID?: number) {
+  function fork(parentID: number) {
     const txn = env.beginTxn();
     // allocate child ID
-    childID = childID || parentID + 1;
+    let childID = parentID + 1;
     let child: Fork | null;
     for (
       child = loadForkRecord(txn, childID);
@@ -66,19 +66,16 @@ export function openForkDB(env: OpenedEnv) {
     return childID;
   }
 
-  function loadParent(childId: number) {
+  function loadParent(txn: ExtendedTxn, childId: number) {
     if (childId === 0) {
       // this is root fork, don't have parent
-      return;
+      return null;
     }
-    const txn = env.beginTxn();
     const child = loadForkRecord(txn, childId);
     if (child === null) {
-      txn.abort();
       throw new Error(`fork record '${childId}' not found`);
     }
     const parentId = child.parentID;
-    txn.commit();
     return loadFork(parentId);
   }
 
@@ -86,42 +83,41 @@ export function openForkDB(env: OpenedEnv) {
     const dbi = env.openDbi({
       name: forkIdToKey(forkId),
     });
-    const parent = loadParent(forkId);
-    return {
+    const self = {
       forkId,
       dbi,
-      fork(childId?: number) {
-        childId = fork(forkId, childId);
+      fork() {
+        const childId = fork(forkId);
         return loadFork(childId);
       },
-      beginTxn() {
-        const txn = env.beginTxn();
+      wrapTxn(txn: ExtendedTxn) {
+        const parent = loadParent(txn, forkId)?.wrapTxn(txn);
         const self = {
           getString(key: Key, keyType?: KeyType): string | null {
             let value = txn.getString(dbi, key, keyType);
             if (value === null && parent) {
-              value = txn.getString(parent.dbi, key, keyType);
+              value = parent.getString(key, keyType);
             }
             return value;
           },
           getBinary(key: Key, keyType?: KeyType): Buffer | null {
             let value = txn.getBinary(dbi, key, keyType);
             if (value === null && parent) {
-              value = txn.getBinary(parent.dbi, key, keyType);
+              value = parent.getBinary(key, keyType);
             }
             return value;
           },
           getNumber(key: Key, keyType?: KeyType): number | null {
             let value = txn.getNumber(dbi, key, keyType);
             if (value === null && parent) {
-              value = txn.getNumber(parent.dbi, key, keyType);
+              value = parent.getNumber(key, keyType);
             }
             return value;
           },
           getBoolean(key: Key, keyType?: KeyType): boolean | null {
             let value = txn.getBoolean(dbi, key, keyType);
             if (value === null && parent) {
-              value = txn.getBoolean(parent.dbi, key, keyType);
+              value = parent.getBoolean(key, keyType);
             }
             return value;
           },
@@ -156,8 +152,16 @@ export function openForkDB(env: OpenedEnv) {
           putObject(key: Key, value: any, keyType?: KeyType): void {
             self.putString(key, JSON.stringify(value), keyType);
           },
+          // similar to 'use database' in mysql, change the implicit dbi
+          changeFork(forkId: number) {
+            // TODO
+          },
         };
         return self;
+      },
+      beginTxn() {
+        const txn = env.beginTxn();
+        return self.wrapTxn(txn);
       },
       /**
        * if no child, delete directly;
@@ -189,6 +193,7 @@ export function openForkDB(env: OpenedEnv) {
         txn.abort();
       },
     };
+    return self;
   }
 
   function loadRoot(forkId: number = 0) {
@@ -225,7 +230,6 @@ export function openForkDB(env: OpenedEnv) {
     }
     txn.commit();
     for (const forkKey of forkKeys) {
-      console.log('deleted', forkKey);
       const dbi = env.openDbi({
         name: forkKey,
         create: true,

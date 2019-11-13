@@ -18,7 +18,7 @@ describe('forkdb TestSuit', () => {
 
   it('should fork without error', () => {
     const root = loadRoot();
-    const child = root.fork(1);
+    const child = root.fork();
     console.log('forked into:', child.forkId);
   });
 
@@ -39,8 +39,22 @@ describe('forkdb TestSuit', () => {
     txn.putString('foo', 'bar');
     txn.commit();
 
-    const child = root.fork(1);
+    const child = root.fork();
     txn = child.beginTxn();
+    expect(txn.getString('foo')).equals('bar');
+    txn.commit();
+  });
+
+  it('should allow child get value from grandparent if not updated', () => {
+    const root = loadRoot();
+    let txn = root.beginTxn();
+    txn.putString('foo', 'bar');
+    txn.commit();
+
+    const child = root.fork();
+
+    const grandchild = child.fork();
+    txn = grandchild.beginTxn();
     expect(txn.getString('foo')).equals('bar');
     txn.commit();
   });
@@ -51,7 +65,7 @@ describe('forkdb TestSuit', () => {
     txn.putString('foo', 'bar');
     txn.commit();
 
-    const child = root.fork(1);
+    const child = root.fork();
     txn = child.beginTxn();
     txn.putString('foo', 'bar2');
     expect(txn.getString('foo')).equals('bar2');
@@ -64,7 +78,7 @@ describe('forkdb TestSuit', () => {
     txn.putString('foo', 'bar');
     txn.commit();
 
-    const child = root.fork(1);
+    const child = root.fork();
     txn = child.beginTxn();
     txn.putString('foo', 'bar2');
     txn.commit();
