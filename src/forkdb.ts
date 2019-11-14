@@ -1,4 +1,5 @@
 import {
+  Dbi,
   ExtendedReadonlyTxn,
   ExtendedTxn,
   Key,
@@ -70,8 +71,10 @@ export function openForkDB(env: OpenedEnv) {
       txn,
     });
     // FIXME only reset+renew for readonly txn
-    txn.reset();
-    txn.renew();
+    if (isReadonly(txn)) {
+      txn.reset();
+      txn.renew();
+    }
     return { childID, dbi };
   }
 
@@ -137,14 +140,30 @@ export function openForkDB(env: OpenedEnv) {
           return JSON.parse(value);
         },
         // similar to 'use database' in mysql, change the implicit dbi
-        changeFork(forkId: number) {
-          return loadFork(forkId).wrapTxn(txn);
+        changeFork(
+          forkId_or_fork: number | { forkId: number; dbi: Dbi },
+        ): void {
+          let forkId: number;
+          let dbi: Dbi | undefined;
+          if (typeof forkId_or_fork === 'number') {
+            forkId = forkId_or_fork;
+          } else {
+            forkId = forkId_or_fork.forkId;
+            dbi = forkId_or_fork.dbi;
+          }
+          const that = loadFork(forkId, dbi).wrapTxn(txn);
+          Object.assign(self, that);
         },
       };
       return self;
     }
 
     function wrapReadWriteTxn(txn: ExtendedTxn) {
+      function fork_() {
+        const { childID, dbi } = fork(txn, forkId);
+        return loadFork(childID, dbi);
+      }
+
       const self = {
         putString(key: Key, value: string, keyType?: KeyType): void {
           txn.putString(dbi, key, value, keyType);
@@ -164,10 +183,8 @@ export function openForkDB(env: OpenedEnv) {
         del(key: Key, keyType?: KeyType): void {
           txn.del(dbi, key, keyType);
         },
-        fork() {
-          const { childID, dbi } = fork(txn, forkId);
-          return loadFork(childID, dbi);
-        },
+        // cannot inline the impl, otherwise will mark the `fork` under `beginTxn` also deprecated
+        fork: fork_,
       };
       return Object.assign(wrapReadonlyTxn(txn), self);
     }
@@ -202,6 +219,13 @@ export function openForkDB(env: OpenedEnv) {
       }
     }
 
+    function fork_() {
+      const txn = env.beginTxn();
+      const { childID, dbi } = fork(txn, forkId);
+      txn.commit();
+      return loadFork(childID, dbi);
+    }
+
     const self = {
       forkId,
       dbi,
@@ -209,12 +233,8 @@ export function openForkDB(env: OpenedEnv) {
        * @deprecated cannot run within other transaction
        * use the one from `self.beginTxn` or `self.wrapTxn` instead
        * */
-      fork() {
-        const txn = env.beginTxn();
-        const { childID, dbi } = fork(txn, forkId);
-        txn.commit();
-        return loadFork(childID, dbi);
-      },
+      // cannot inline the impl, otherwise will mark the `fork` under `beginTxn` also deprecated
+      fork: fork_,
       wrapTxn,
       beginTxn,
       /**

@@ -12,6 +12,8 @@ describe('forkdb TestSuit', () => {
   });
   const { clearAll, loadRoot } = openForkDB(env);
 
+  const WhoAmI = 'WhoAmI';
+
   it('should load root without error', () => {
     loadRoot();
   });
@@ -19,7 +21,7 @@ describe('forkdb TestSuit', () => {
   it('should fork without error', () => {
     const root = loadRoot();
     const child = root.fork();
-    console.log('forked into:', child.forkId);
+    expect(root.forkId).not.equals(child.forkId);
   });
 
   it('should be able to store and get back value', () => {
@@ -93,16 +95,38 @@ describe('forkdb TestSuit', () => {
     const child = root.fork();
     {
       const txn = root.beginTxn();
-      txn.putString('WhoAmI', 'root');
+      txn.putString(WhoAmI, 'root');
       txn.changeFork(child.forkId);
-      txn.putString('WhoAmI', 'child');
+      txn.putString(WhoAmI, 'child');
       txn.commit();
     }
     {
       const txn = root.beginTxn({ readOnly: true });
-      expect(txn.getString('WhoAmI')).equals('root');
+      expect(txn.getString(WhoAmI)).equals('root');
       txn.changeFork(child.forkId);
-      expect(txn.getString('WhoAmI')).equals('child');
+      expect(txn.getString(WhoAmI)).equals('child');
+      txn.commit();
+    }
+  });
+
+  it('should be able to fork after transaction has started', () => {
+    const root = loadRoot();
+    const txn = root.beginTxn();
+    txn.putString(WhoAmI, 'root');
+    const child = txn.fork();
+    txn.putString(WhoAmI, 'still root');
+    txn.changeFork(child);
+    txn.putString(WhoAmI, 'child');
+    txn.commit();
+
+    {
+      const txn = root.beginTxn({ readOnly: true });
+      expect(txn.getString(WhoAmI)).equals('still root');
+      txn.commit();
+    }
+    {
+      const txn = child.beginTxn({ readOnly: true });
+      expect(txn.getString(WhoAmI)).equals('child');
       txn.commit();
     }
   });
