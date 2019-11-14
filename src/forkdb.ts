@@ -8,7 +8,7 @@ import {
   OpenedEnv,
 } from 'typestub-node-lmdb';
 
-type Fork = {
+type ForkRecord = {
   parentID: number;
   childIDs: number[];
 };
@@ -19,6 +19,64 @@ function isReadonly(txn: ExtendedReadonlyTxn | ExtendedTxn): boolean {
   return !(txn as ExtendedTxn).putObject;
 }
 
+export type ReadonlyForkTxn = {
+  getString(key: Key, keyType?: KeyType): string | null;
+  getBinary(key: Key, keyType?: KeyType): Buffer | null;
+  getNumber(key: Key, keyType?: KeyType): number | null;
+  getBoolean(key: Key, keyType?: KeyType): boolean | null;
+  commit(): void;
+  abort(): void;
+  getObject<T>(key: Key, keyType?: KeyType): T | null;
+  // similar to 'use database' in mysql, change the implicit dbi
+  changeFork(forkId_or_fork: number | { forkId: number; dbi: Dbi }): void;
+};
+export type DropResult = 'not_exist' | 'ok';
+export type ForkTxn = ReadonlyForkTxn & {
+  // cannot inline the impl, otherwise will mark the `fork` under `beginTxn` also deprecated
+  fork: () => Fork;
+  /**
+   * if no child, delete directly;
+   * if only one child, merge into child;
+   * if multiple child, keep the fork, but mark for delete
+   * */
+  drop: () => DropResult;
+  putString(key: Key, value: string, keyType?: KeyType): void;
+  putBinary(key: Key, value: Buffer, keyType?: KeyType): void;
+  putNumber(key: Key, value: number, keyType?: KeyType): void;
+  putBoolean(key: Key, value: boolean, keyType?: KeyType): void;
+  putObject(key: Key, value: any, keyType?: KeyType): void;
+  del(key: Key, keyType?: KeyType): void;
+};
+
+interface IWrapTxn {
+  (txn: ExtendedTxn): ForkTxn;
+
+  (txn: ExtendedReadonlyTxn): ReadonlyForkTxn;
+}
+
+interface IBeginTxn {
+  (options?: { readOnly?: false }): ForkTxn;
+
+  (options: { readOnly: true }): ReadonlyForkTxn;
+}
+
+export type Fork = {
+  forkId: number;
+  dbi: Dbi;
+  wrapTxn: IWrapTxn;
+  beginTxn: IBeginTxn;
+  /**
+   * @deprecated cannot run within other transaction
+   * use the `fork` under `self.beginTxn` or `self.wrapTxn` instead
+   * */
+  fork: () => Fork;
+  /**
+   * @deprecated cannot run within other transaction
+   * use the `drop` under `self.beginTxn` or `self.wrapTxn` instead
+   * */
+  drop(): DropResult;
+};
+
 export function openForkDB(env: OpenedEnv) {
   const forkDB = env.openDbi({
     name: 'fork',
@@ -28,12 +86,12 @@ export function openForkDB(env: OpenedEnv) {
   function loadForkRecord(
     txn: ExtendedReadonlyTxn,
     forkId: number,
-  ): Fork | null {
+  ): ForkRecord | null {
     const key = forkIdToKey(forkId);
-    return txn.getObject<Fork>(forkDB, key);
+    return txn.getObject<ForkRecord>(forkDB, key);
   }
 
-  function saveForkRecord(txn: ExtendedTxn, forkId: number, fork: Fork) {
+  function saveForkRecord(txn: ExtendedTxn, forkId: number, fork: ForkRecord) {
     const key = forkIdToKey(forkId);
     txn.putObject(forkDB, key, fork);
   }
@@ -41,7 +99,7 @@ export function openForkDB(env: OpenedEnv) {
   function fork(txn: ExtendedTxn, parentID: number) {
     // allocate child ID
     let childID = parentID + 1;
-    let child: Fork | null;
+    let child: ForkRecord | null;
     for (
       child = loadForkRecord(txn, childID);
       child !== null;
@@ -94,180 +152,171 @@ export function openForkDB(env: OpenedEnv) {
   function loadFork(
     forkId: number,
     dbi = env.openDbi({ name: forkIdToKey(forkId) }),
-  ) {
-    function wrapReadonlyTxn(txn: ExtendedReadonlyTxn) {
+  ): Fork {
+    function wrapTxn(txn: ExtendedTxn): ForkTxn;
+    function wrapTxn(txn: ExtendedReadonlyTxn): ReadonlyForkTxn;
+    function wrapTxn(
+      txn: ExtendedTxn | ExtendedReadonlyTxn,
+    ): ForkTxn | ReadonlyForkTxn {
       const parent = loadParent(txn, forkId)?.wrapTxn(txn);
-      const self = {
-        getString(key: Key, keyType?: KeyType): string | null {
-          let value = txn.getString(dbi, key, keyType);
-          if (value === null && parent) {
-            value = parent.getString(key, keyType);
-          }
-          return value;
-        },
-        getBinary(key: Key, keyType?: KeyType): Buffer | null {
-          let value = txn.getBinary(dbi, key, keyType);
-          if (value === null && parent) {
-            value = parent.getBinary(key, keyType);
-          }
-          return value;
-        },
-        getNumber(key: Key, keyType?: KeyType): number | null {
-          let value = txn.getNumber(dbi, key, keyType);
-          if (value === null && parent) {
-            value = parent.getNumber(key, keyType);
-          }
-          return value;
-        },
-        getBoolean(key: Key, keyType?: KeyType): boolean | null {
-          let value = txn.getBoolean(dbi, key, keyType);
-          if (value === null && parent) {
-            value = parent.getBoolean(key, keyType);
-          }
-          return value;
-        },
-        commit(): void {
-          txn.commit();
-        },
-        abort(): void {
-          txn.abort();
-        },
-        getObject<T>(key: Key, keyType?: KeyType): T | null {
-          const value = self.getString(key, keyType);
-          if (value === null) {
+      const self = ((txn: ExtendedReadonlyTxn) => {
+        const self: ReadonlyForkTxn = {
+          getString(key: Key, keyType?: KeyType): string | null {
+            let value = txn.getString(dbi, key, keyType);
+            if (value === null && parent) {
+              value = parent.getString(key, keyType);
+            }
             return value;
-          }
-          return JSON.parse(value);
-        },
-        // similar to 'use database' in mysql, change the implicit dbi
-        changeFork(
-          forkId_or_fork: number | { forkId: number; dbi: Dbi },
-        ): void {
-          let forkId: number;
-          let dbi: Dbi | undefined;
-          if (typeof forkId_or_fork === 'number') {
-            forkId = forkId_or_fork;
-          } else {
-            forkId = forkId_or_fork.forkId;
-            dbi = forkId_or_fork.dbi;
-          }
-          const that = loadFork(forkId, dbi).wrapTxn(txn);
-          Object.assign(self, that);
-        },
-      };
-      return self;
-    }
-
-    function wrapReadWriteTxn(txn: ExtendedTxn) {
-      function fork_() {
-        const { childID, dbi } = fork(txn, forkId);
-        return loadFork(childID, dbi);
+          },
+          getBinary(key: Key, keyType?: KeyType): Buffer | null {
+            let value = txn.getBinary(dbi, key, keyType);
+            if (value === null && parent) {
+              value = parent.getBinary(key, keyType);
+            }
+            return value;
+          },
+          getNumber(key: Key, keyType?: KeyType): number | null {
+            let value = txn.getNumber(dbi, key, keyType);
+            if (value === null && parent) {
+              value = parent.getNumber(key, keyType);
+            }
+            return value;
+          },
+          getBoolean(key: Key, keyType?: KeyType): boolean | null {
+            let value = txn.getBoolean(dbi, key, keyType);
+            if (value === null && parent) {
+              value = parent.getBoolean(key, keyType);
+            }
+            return value;
+          },
+          commit(): void {
+            txn.commit();
+          },
+          abort(): void {
+            txn.abort();
+          },
+          getObject<T>(key: Key, keyType?: KeyType): T | null {
+            const value = self.getString(key, keyType);
+            if (value === null) {
+              return value;
+            }
+            return JSON.parse(value) as T;
+          },
+          // similar to 'use database' in mysql, change the implicit dbi
+          changeFork(
+            forkId_or_fork: number | { forkId: number; dbi: Dbi },
+          ): void {
+            let forkId: number;
+            let dbi: Dbi | undefined;
+            if (typeof forkId_or_fork === 'number') {
+              forkId = forkId_or_fork;
+            } else {
+              forkId = forkId_or_fork.forkId;
+              dbi = forkId_or_fork.dbi;
+            }
+            const that = loadFork(forkId, dbi).wrapTxn(txn);
+            Object.assign(self, that);
+          },
+        };
+        return self;
+      })(txn);
+      if (isReadonly(txn)) {
+        return self;
       }
+      return ((txn: ExtendedTxn, readonlySelf: ReadonlyForkTxn) => {
+        const self: ForkTxn = Object.assign(readonlySelf, {
+          putString(key: Key, value: string, keyType?: KeyType): void {
+            txn.putString(dbi, key, value, keyType);
+          },
+          putBinary(key: Key, value: Buffer, keyType?: KeyType): void {
+            txn.putBinary(dbi, key, value, keyType);
+          },
+          putNumber(key: Key, value: number, keyType?: KeyType): void {
+            txn.putNumber(dbi, key, value, keyType);
+          },
+          putBoolean(key: Key, value: boolean, keyType?: KeyType): void {
+            txn.putBoolean(dbi, key, value, keyType);
+          },
+          putObject(key: Key, value: any, keyType?: KeyType): void {
+            self.putString(key, JSON.stringify(value), keyType);
+          },
+          del(key: Key, keyType?: KeyType): void {
+            txn.del(dbi, key, keyType);
+          },
+          // cannot inline the impl, otherwise will mark the `fork` under `beginTxn` also deprecated
+          fork() {
+            const { childID, dbi } = fork(txn, forkId);
+            return loadFork(childID, dbi);
+          },
+          /**
+           * if no child, delete directly;
+           * if only one child, merge into child;
+           * if multiple child, keep the fork, but mark for delete
+           * */
+          drop(): DropResult {
+            // TODO
+            const fork = loadForkRecord(txn, forkId);
+            if (fork === null) {
+              return 'not_exist';
+            }
 
-      const self = {
-        putString(key: Key, value: string, keyType?: KeyType): void {
-          txn.putString(dbi, key, value, keyType);
-        },
-        putBinary(key: Key, value: Buffer, keyType?: KeyType): void {
-          txn.putBinary(dbi, key, value, keyType);
-        },
-        putNumber(key: Key, value: number, keyType?: KeyType): void {
-          txn.putNumber(dbi, key, value, keyType);
-        },
-        putBoolean(key: Key, value: boolean, keyType?: KeyType): void {
-          txn.putBoolean(dbi, key, value, keyType);
-        },
-        putObject(key: Key, value: any, keyType?: KeyType): void {
-          self.putString(key, JSON.stringify(value), keyType);
-        },
-        del(key: Key, keyType?: KeyType): void {
-          txn.del(dbi, key, keyType);
-        },
-        // cannot inline the impl, otherwise will mark the `fork` under `beginTxn` also deprecated
-        fork: fork_,
-      };
-      return Object.assign(wrapReadonlyTxn(txn), self);
+            function injectDrop() {
+              const commit = txn.commit.bind(txn);
+              txn.commit = () => {
+                commit();
+                dbi.drop();
+              };
+            }
+
+            // if no child, delete directly;
+            if (fork.childIDs.length === 0) {
+              injectDrop();
+              return 'ok';
+            }
+
+            // if only one child, merge into child;
+            if (fork.childIDs.length === 1) {
+              // TODO
+            }
+            // if multiple child, keep the fork, but mark for delete
+            // TODO
+            return 'ok';
+          },
+        });
+        return self;
+      })(txn as ExtendedTxn, self);
     }
 
-    function wrapTxn(
-      txn: ExtendedReadonlyTxn,
-    ): ReturnType<typeof wrapReadonlyTxn>;
-    function wrapTxn(txn: ExtendedTxn): ReturnType<typeof wrapReadWriteTxn>;
-    function wrapTxn(
-      txn: ExtendedReadonlyTxn | ExtendedTxn,
-      readOnly = isReadonly(txn),
-    ) {
-      if (readOnly) {
-        return wrapReadonlyTxn(txn);
-      }
-      return wrapReadWriteTxn(txn as ExtendedTxn);
-    }
-
+    function beginTxn(options?: { readOnly?: false }): ForkTxn;
+    function beginTxn(options: { readOnly: true }): ReadonlyForkTxn;
     function beginTxn(options?: {
-      readOnly?: false;
-    }): ReturnType<typeof wrapReadWriteTxn>;
-    function beginTxn(options: {
-      readOnly: true;
-    }): ReturnType<typeof wrapReadonlyTxn>;
-    function beginTxn(options?: { readOnly?: boolean }) {
-      if (options && options.readOnly) {
-        const txn = env.beginTxn({ readOnly: true });
-        return wrapReadonlyTxn(txn);
-      } else {
-        const txn = env.beginTxn({ readOnly: false });
-        return wrapReadWriteTxn(txn);
-      }
+      readOnly?: boolean;
+    }): ForkTxn | ReadonlyForkTxn {
+      const txn =
+        options && options.readOnly
+          ? env.beginTxn({ readOnly: true })
+          : env.beginTxn();
+      return wrapTxn(txn);
     }
 
-    function fork_() {
-      const txn = env.beginTxn();
-      const { childID, dbi } = fork(txn, forkId);
-      txn.commit();
-      return loadFork(childID, dbi);
-    }
-
-    const self = {
+    return {
       forkId,
       dbi,
-      /**
-       * @deprecated cannot run within other transaction
-       * use the one from `self.beginTxn` or `self.wrapTxn` instead
-       * */
-      // cannot inline the impl, otherwise will mark the `fork` under `beginTxn` also deprecated
-      fork: fork_,
+      fork(): Fork {
+        const txn = env.beginTxn();
+        const { childID, dbi } = fork(txn, forkId);
+        txn.commit();
+        return loadFork(childID, dbi);
+      },
+      drop(): DropResult {
+        const txn = env.beginTxn();
+        const result = wrapTxn(txn).drop();
+        txn.commit();
+        return result;
+      },
       wrapTxn,
       beginTxn,
-      /**
-       * if no child, delete directly;
-       * if only one child, merge into child;
-       * if multiple child, keep the fork, but mark for delete
-       * */
-      drop() {
-        const txn = env.beginTxn();
-        const fork = loadForkRecord(txn, forkId);
-        if (fork === null) {
-          if ('silent') {
-            txn.abort();
-            return;
-          }
-          throw new Error(`fork record '${forkId}' not found`);
-        }
-        // if no child, delete directly;
-        if (fork.childIDs.length === 0) {
-          txn.commit();
-          dbi.drop();
-          return;
-        }
-        // if only one child, merge into child;
-        if (fork.childIDs.length === 1) {
-          // TODO
-        }
-        // if multiple child, keep the fork, but mark for delete
-        // TODO
-        txn.abort();
-      },
     };
-    return self;
   }
 
   function loadRoot(forkId: number = 0) {

@@ -5,6 +5,7 @@
     "tslint-config-prettier"
   ],
   "rules": {
+    "no-unsafe-any": true,
     "interface-over-type-literal": false,
     "no-reference": true,
     "only-arrow-functions": false,
