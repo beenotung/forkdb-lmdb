@@ -158,7 +158,7 @@ export function openForkDB(env: OpenedEnv) {
     return env.openDbi({ name: forkIdToKey(forkId), txn });
   }
 
-  function loadFork(forkId: number, dbi_or_txn: Dbi | Txn): Fork {
+  function loadFork(forkId: number, dbi_or_txn?: Dbi | Txn): Fork {
     const dbi: Dbi = ((): Dbi => {
       if (!dbi_or_txn) {
         return loadForkDbi(forkId);
