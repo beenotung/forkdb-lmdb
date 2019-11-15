@@ -6,6 +6,8 @@ import {
   KeyType,
   newCursor,
   OpenedEnv,
+  ReadonlyTxn,
+  Txn,
 } from 'typestub-node-lmdb';
 
 type ForkRecord = {
@@ -20,6 +22,7 @@ function isReadonly(txn: ExtendedReadonlyTxn | ExtendedTxn): boolean {
 }
 
 export type ReadonlyForkTxn = {
+  txn: ExtendedReadonlyTxn;
   parent: Fork | null;
   getString(key: Key, keyType?: KeyType): string | null;
   getBinary(key: Key, keyType?: KeyType): Buffer | null;
@@ -33,6 +36,7 @@ export type ReadonlyForkTxn = {
 };
 export type DropResult = 'not_exist' | 'ok';
 export type ForkTxn = ReadonlyForkTxn & {
+  txn: ExtendedTxn;
   // cannot inline the impl, otherwise will mark the `fork` under `beginTxn` also deprecated
   fork: () => Fork;
   /**
@@ -147,13 +151,25 @@ export function openForkDB(env: OpenedEnv) {
       throw new Error(`fork record '${childId}' not found`);
     }
     const parentId = child.parentID;
-    return loadFork(parentId);
+    return loadFork(parentId, (txn as ReadonlyTxn) as Txn);
   }
 
-  function loadFork(
-    forkId: number,
-    dbi = env.openDbi({ name: forkIdToKey(forkId) }),
-  ): Fork {
+  function loadForkDbi(forkId: number, txn?: Txn) {
+    return env.openDbi({ name: forkIdToKey(forkId), txn });
+  }
+
+  function loadFork(forkId: number, dbi_or_txn: Dbi | Txn): Fork {
+    const dbi: Dbi = ((): Dbi => {
+      if (!dbi_or_txn) {
+        return loadForkDbi(forkId);
+      }
+      const txn = dbi_or_txn as Txn;
+      if (!!txn.putString) {
+        return loadForkDbi(forkId, txn);
+      }
+      return dbi_or_txn as Dbi;
+    })();
+
     function wrapTxn(txn: ExtendedTxn): ForkTxn;
     function wrapTxn(txn: ExtendedReadonlyTxn): ReadonlyForkTxn;
     function wrapTxn(
@@ -163,6 +179,7 @@ export function openForkDB(env: OpenedEnv) {
       const parent = parentFork?.wrapTxn(txn);
       const self = ((txn: ExtendedReadonlyTxn) => {
         const self: ReadonlyForkTxn = {
+          txn,
           parent: parentFork,
           getString(key: Key, keyType?: KeyType): string | null {
             let value = txn.getString(dbi, key, keyType);
@@ -217,7 +234,10 @@ export function openForkDB(env: OpenedEnv) {
               forkId = forkId_or_fork.forkId;
               dbi = forkId_or_fork.dbi;
             }
-            const that = loadFork(forkId, dbi).wrapTxn(txn);
+            const that = loadFork(
+              forkId,
+              dbi || ((txn as ReadonlyTxn) as Txn),
+            ).wrapTxn(txn);
             Object.assign(self, that);
           },
         };
@@ -228,6 +248,7 @@ export function openForkDB(env: OpenedEnv) {
       }
       return ((txn: ExtendedTxn, readonlySelf: ReadonlyForkTxn) => {
         const self: ForkTxn = Object.assign(readonlySelf, {
+          txn,
           putString(key: Key, value: string, keyType?: KeyType): void {
             txn.putString(dbi, key, value, keyType);
           },
@@ -363,6 +384,21 @@ export function openForkDB(env: OpenedEnv) {
     }
   }
 
+  function dropFork(txn: ExtendedTxn, forkId: number): DropResult {
+    try {
+      const fork = loadFork(forkId, txn);
+      return fork.wrapTxn(txn).drop();
+    } catch (e) {
+      if (
+        e instanceof Error &&
+        e.message === 'MDB_NOTFOUND: No matching key/data pair found'
+      ) {
+        return 'not_exist';
+      }
+      throw e;
+    }
+  }
+
   return {
     fork,
     loadFork,
@@ -371,17 +407,18 @@ export function openForkDB(env: OpenedEnv) {
      * drop the dbi of the given forkId
      * will skip silently if the dbi doesn't exist
      * */
+    dropForkWithTxn: dropFork,
+    /**
+     * @deprecated cannot run within other transaction
+     * */
     dropFork(forkId: number): DropResult {
+      const txn = env.beginTxn();
       try {
-        const fork = loadFork(forkId);
-        return fork.drop();
+        const res = dropFork(txn, forkId);
+        txn.commit();
+        return res;
       } catch (e) {
-        if (
-          e instanceof Error &&
-          e.message === 'MDB_NOTFOUND: No matching key/data pair found'
-        ) {
-          return 'not_exist';
-        }
+        txn.abort();
         throw e;
       }
     },
