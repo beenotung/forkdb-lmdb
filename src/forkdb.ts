@@ -20,6 +20,7 @@ function isReadonly(txn: ExtendedReadonlyTxn | ExtendedTxn): boolean {
 }
 
 export type ReadonlyForkTxn = {
+  parent: Fork | null;
   getString(key: Key, keyType?: KeyType): string | null;
   getBinary(key: Key, keyType?: KeyType): Buffer | null;
   getNumber(key: Key, keyType?: KeyType): number | null;
@@ -136,7 +137,7 @@ export function openForkDB(env: OpenedEnv) {
     return { childID, dbi };
   }
 
-  function loadParent(txn: ExtendedReadonlyTxn, childId: number) {
+  function loadParent(txn: ExtendedReadonlyTxn, childId: number): Fork | null {
     if (childId === 0) {
       // this is root fork, don't have parent
       return null;
@@ -158,9 +159,11 @@ export function openForkDB(env: OpenedEnv) {
     function wrapTxn(
       txn: ExtendedTxn | ExtendedReadonlyTxn,
     ): ForkTxn | ReadonlyForkTxn {
-      const parent = loadParent(txn, forkId)?.wrapTxn(txn);
+      const parentFork = loadParent(txn, forkId);
+      const parent = parentFork?.wrapTxn(txn);
       const self = ((txn: ExtendedReadonlyTxn) => {
         const self: ReadonlyForkTxn = {
+          parent: parentFork,
           getString(key: Key, keyType?: KeyType): string | null {
             let value = txn.getString(dbi, key, keyType);
             if (value === null && parent) {
