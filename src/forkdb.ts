@@ -364,6 +364,24 @@ export function openForkDB(env: OpenedEnv) {
     fork,
     loadFork,
     loadRoot,
+    /**
+     * drop the dbi of the given forkId
+     * will skip silently if the dbi doesn't exist
+     * */
+    dropFork(forkId: number): DropResult {
+      try {
+        const fork = loadFork(forkId);
+        return fork.drop();
+      } catch (e) {
+        if (
+          e instanceof Error &&
+          e.message === 'MDB_NOTFOUND: No matching key/data pair found'
+        ) {
+          return 'not_exist';
+        }
+        throw e;
+      }
+    },
     clearAll,
   };
 }

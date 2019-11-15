@@ -8,9 +8,9 @@ import { openForkDB } from '../src/forkdb';
 describe('forkdb TestSuit', () => {
   const env = newEnv().open({
     path: 'data',
-    maxDbs: 10,
+    maxDbs: 20,
   });
-  const { clearAll, loadRoot } = openForkDB(env);
+  const { clearAll, loadRoot, dropFork } = openForkDB(env);
 
   const WhoAmI = 'WhoAmI';
 
@@ -131,8 +131,19 @@ describe('forkdb TestSuit', () => {
     }
   });
 
+  it('should drop non-existing fork without error', () => {
+    // get an available forkId
+    let fork = loadRoot().fork();
+
+    // drop this fork
+    fork.drop();
+
+    // test if it pass without error
+    dropFork(fork.forkId);
+  });
+
   it('should clear all forks without error', () => {
     clearAll();
-  });
+  }).timeout(5 * 1000);
 });
 // tslint:enable:no-unused-expression
