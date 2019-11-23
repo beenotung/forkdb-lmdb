@@ -33,6 +33,7 @@ export type ReadonlyForkTxn = {
   getObject<T>(key: Key, keyType?: KeyType): T | null;
   // similar to 'use database' in mysql, change the implicit dbi
   changeFork(forkId_or_fork: number | { forkId: number; dbi: Dbi }): void;
+  forEachKey(f: (key: Key) => void): void;
 };
 export type DropResult = 'not_exist' | 'ok';
 export type ForkTxn = ReadonlyForkTxn & {
@@ -240,6 +241,14 @@ export function openForkDB(env: OpenedEnv) {
             ).wrapTxn(txn);
             Object.assign(self, that);
           },
+          forEachKey(f: (key: Key) => void): void {
+            const cursor = newCursor(txn as ExtendedTxn, dbi);
+            let key = cursor.goToFirst();
+            while (key !== null) {
+              f(key);
+              key = cursor.goToNext();
+            }
+          },
         };
         return self;
       })(txn);
@@ -283,6 +292,7 @@ export function openForkDB(env: OpenedEnv) {
             if (fork === null) {
               return 'not_exist';
             }
+            console.log({ forkId, '# child': fork.childIDs.length });
 
             function injectDrop() {
               const commit = txn.commit.bind(txn);
@@ -301,6 +311,9 @@ export function openForkDB(env: OpenedEnv) {
             // if only one child, merge into child;
             if (fork.childIDs.length === 1) {
               // TODO
+              const childForkId = fork.childIDs[0]!;
+              const child = loadFork(childForkId, txn);
+              env;
             }
             // if multiple child, keep the fork, but mark for delete
             // TODO
@@ -385,9 +398,9 @@ export function openForkDB(env: OpenedEnv) {
   }
 
   function dropFork(txn: ExtendedTxn, forkId: number): DropResult {
+    let fork: Fork;
     try {
-      const fork = loadFork(forkId, txn);
-      return fork.wrapTxn(txn).drop();
+      fork = loadFork(forkId, txn);
     } catch (e) {
       if (
         e instanceof Error &&
@@ -397,6 +410,7 @@ export function openForkDB(env: OpenedEnv) {
       }
       throw e;
     }
+    return fork.wrapTxn(txn).drop();
   }
 
   return {

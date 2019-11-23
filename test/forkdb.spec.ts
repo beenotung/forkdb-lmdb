@@ -10,9 +10,13 @@ describe('forkdb TestSuit', () => {
     path: 'data',
     maxDbs: 20,
   });
-  const { clearAll, loadRoot, dropFork } = openForkDB(env);
+  const { clearAll, loadRoot, dropFork, loadFork } = openForkDB(env);
 
   const WhoAmI = 'WhoAmI';
+
+  function expectForkNotExist(forkId:number){
+    expect(loadFork.bind(null, forkId)).to.throw('MDB_NOTFOUND: No matching key/data pair found');
+  }
 
   it('should load root without error', () => {
     loadRoot();
@@ -145,5 +149,28 @@ describe('forkdb TestSuit', () => {
   it('should clear all forks without error', () => {
     clearAll();
   }).timeout(5 * 1000);
+
+  it('should load non-existing fork with error', () => {
+    expectForkNotExist(987)
+  });
+
+  it('should drop fork without child', function() {
+    let fork = loadRoot().fork();
+    dropFork(fork.forkId);
+    expectForkNotExist(fork.forkId)
+  });
+
+  it('should drop fork with one child', function() {
+    let root = loadRoot()
+    let child = root.fork()
+    let grandchild = child.fork()
+    child.drop()
+    expectForkNotExist(child.forkId)
+  });
+
+  it('should drop fork with multiple children when possible', function() {
+
+  });
+
 });
 // tslint:enable:no-unused-expression
