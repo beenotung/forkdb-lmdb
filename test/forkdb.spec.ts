@@ -18,6 +18,10 @@ describe('forkdb TestSuit', () => {
     expect(loadFork.bind(null, forkId)).to.throw('MDB_NOTFOUND: No matching key/data pair found');
   }
 
+  function expectForkExist(forkId: number) {
+    expect(loadFork.bind(null, forkId)).not.to.throw('MDB_NOTFOUND: No matching key/data pair found');
+  }
+
   it('should load root without error', () => {
     loadRoot();
   });
@@ -222,9 +226,8 @@ describe('forkdb TestSuit', () => {
     }
 
     // drop child
-    // expect(child.drop()).equals('ok');
-    // expectForkNotExist(child.forkId);
-    child.drop();
+    expect(child.drop()).equals('defer');
+    expectForkExist(child.forkId);
 
     // test if other forks are affected
     {
@@ -234,6 +237,13 @@ describe('forkdb TestSuit', () => {
       expect(txn.getString(grandchild2.dbi, WhoAmI)).equals('grandchild2');
       txn.commit();
     }
+
+    // drop grandchildren
+    expect(grandchild1.drop()).equals('ok');
+    expectForkNotExist(grandchild1.forkId);
+    expect(grandchild2.drop()).equals('ok');
+    expectForkNotExist(grandchild2.forkId);
+    expectForkNotExist(child.forkId);
   });
 
 });

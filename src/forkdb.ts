@@ -13,6 +13,7 @@ import {
 type ForkRecord = {
   parentID: number;
   childIDs: number[];
+  deferDelete?: boolean;
 };
 
 const forkIdToKey = (forkId: number) => 'fork' + ':' + forkId;
@@ -35,7 +36,7 @@ export type ReadonlyForkTxn = {
   changeFork(forkId_or_fork: number | { forkId: number; dbi: Dbi }): void;
   forEachKey(f: (key: Key) => void): void;
 };
-export type DropResult = 'not_exist' | 'ok';
+export type DropResult = 'not_exist' | 'ok' | 'defer';
 export type ForkTxn = ReadonlyForkTxn & {
   txn: ExtendedTxn;
   // cannot inline the impl, otherwise will mark the `fork` under `beginTxn` also deprecated
@@ -273,6 +274,54 @@ export function openForkDB(env: OpenedEnv) {
     }
   }
 
+  function rawDropFork(args: {
+    txn: ExtendedTxn;
+    forkId: number;
+    dbi: Dbi;
+    parentID: number;
+  }) {
+    const { txn, forkId, dbi, parentID } = args;
+    delForkRecord(txn, forkId);
+    dbi.drop({ txn });
+    const parentForkRecord = loadForkRecord(txn, parentID);
+    if (parentForkRecord === null) {
+      return;
+    }
+    parentForkRecord.childIDs = parentForkRecord.childIDs.filter(
+      childId => childId !== forkId,
+    );
+    saveForkRecord(txn, parentID, parentForkRecord);
+  }
+
+  function checkDeferDelete(txn: ExtendedTxn, forkId: number) {
+    while (true) {
+      const forkRecord = loadForkRecord(txn, forkId);
+      if (forkRecord === null) {
+        return;
+      }
+      if (!forkRecord.deferDelete) {
+        return;
+      }
+      if (forkRecord.childIDs.length > 0) {
+        // still has children, cannot delete yet
+        return;
+      }
+      rawDropFork({
+        txn,
+        forkId,
+        dbi: loadForkDbi(forkId),
+        parentID: forkRecord.parentID,
+      });
+      const parentForkId = forkRecord.parentID;
+      if (parentForkId === 0) {
+        // root fork will not be deleted
+        return;
+      }
+      // recursively scan parent
+      forkId = parentForkId;
+    }
+  }
+
   function loadFork(forkId: number, dbi_or_txn?: Dbi | Txn): Fork {
     const dbi: Dbi = ((): Dbi => {
       if (!dbi_or_txn) {
@@ -402,38 +451,30 @@ export function openForkDB(env: OpenedEnv) {
            * */
           drop(): DropResult {
             // TODO
-            const fork = loadForkRecord(txn, forkId);
-            if (fork === null) {
+            const forkRecord = loadForkRecord(txn, forkId);
+            if (forkRecord === null) {
               return 'not_exist';
-            }
-            console.log({
-              forkId,
-              '# child': fork.childIDs.length,
-            });
-
-            function dropFork(fork: { forkId: number; dbi: Dbi }) {
-              delForkRecord(txn, fork.forkId);
-              fork.dbi.drop({ txn });
             }
 
             // if no child, delete directly;
-            if (fork.childIDs.length === 0) {
-              dropFork({ forkId, dbi });
+            if (forkRecord.childIDs.length === 0) {
+              rawDropFork({ txn, forkId, dbi, parentID: forkRecord.parentID });
+              checkDeferDelete(txn, forkRecord.parentID);
               return 'ok';
             }
 
             // if only one child, merge into child;
-            if (fork.childIDs.length === 1) {
-              // TODO
+            if (forkRecord.childIDs.length === 1) {
               const res = migrateFork({
                 txn,
                 selfForkId: forkId,
                 selfDbi: dbi,
-                childForkId: fork.childIDs[0],
+                childForkId: forkRecord.childIDs[0],
               });
               switch (res) {
                 case 'self_to_child':
                 case 'child_to_self':
+                  checkDeferDelete(txn, forkRecord.parentID);
                   return 'ok';
                 default:
                   console.error('failed to migrate fork, result:', res);
@@ -444,9 +485,12 @@ export function openForkDB(env: OpenedEnv) {
                   }
               }
             }
-            // if multiple child, keep the fork, but mark for delete
+
+            // has multiple child, keep the fork, but mark for delete
             // TODO
-            return 'ok';
+            forkRecord.deferDelete = true;
+            saveForkRecord(txn, forkId, forkRecord);
+            return 'defer';
           },
         });
         return self;
