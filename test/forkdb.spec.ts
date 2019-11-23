@@ -14,7 +14,7 @@ describe('forkdb TestSuit', () => {
 
   const WhoAmI = 'WhoAmI';
 
-  function expectForkNotExist(forkId:number){
+  function expectForkNotExist(forkId: number) {
     expect(loadFork.bind(null, forkId)).to.throw('MDB_NOTFOUND: No matching key/data pair found');
   }
 
@@ -151,25 +151,89 @@ describe('forkdb TestSuit', () => {
   }).timeout(5 * 1000);
 
   it('should load non-existing fork with error', () => {
-    expectForkNotExist(987)
+    expectForkNotExist(987);
   });
 
   it('should drop fork without child', function() {
-    let fork = loadRoot().fork();
-    dropFork(fork.forkId);
-    expectForkNotExist(fork.forkId)
+    const parent = loadRoot().fork();
+    const child = parent.fork();
+
+    // set values to distinct parent and child
+    {
+      const txn = env.beginTxn();
+      txn.putString(parent.dbi, WhoAmI, 'parent');
+      txn.putString(child.dbi, WhoAmI, 'child');
+      txn.commit();
+    }
+
+    // drop child
+    expect(child.drop()).equals('ok');
+    expectForkNotExist(child.forkId);
+
+    // test if parent is affected
+    {
+      const txn = env.beginTxn();
+      expect(txn.getString(parent.dbi, WhoAmI)).equals('parent');
+      txn.commit();
+    }
   });
 
   it('should drop fork with one child', function() {
-    let root = loadRoot()
-    let child = root.fork()
-    let grandchild = child.fork()
-    child.drop()
-    expectForkNotExist(child.forkId)
+    const parent = loadRoot().fork();
+    const child = parent.fork();
+    const grandchild = child.fork();
+
+    // set value to distinct forks
+    {
+      const txn = env.beginTxn();
+      txn.putString(parent.dbi, WhoAmI, 'parent');
+      txn.putString(child.dbi, WhoAmI, 'child');
+      txn.putString(grandchild.dbi, WhoAmI, 'grandchild');
+      txn.commit();
+    }
+
+    // drop child
+    expect(child.drop()).equals('ok');
+    expectForkNotExist(child.forkId);
+
+    // test if other forks are affected
+    {
+      const txn = env.beginTxn();
+      expect(txn.getString(parent.dbi, WhoAmI)).equals('parent');
+      expect(txn.getString(grandchild.dbi, WhoAmI)).equals('grandchild');
+      txn.commit();
+    }
   });
 
   it('should drop fork with multiple children when possible', function() {
+    const parent = loadRoot().fork();
+    const child = parent.fork();
+    const grandchild1 = child.fork();
+    const grandchild2 = child.fork();
 
+    // set value to distinct forks
+    {
+      const txn = env.beginTxn();
+      txn.putString(parent.dbi, WhoAmI, 'parent');
+      txn.putString(child.dbi, WhoAmI, 'child');
+      txn.putString(grandchild1.dbi, WhoAmI, 'grandchild1');
+      txn.putString(grandchild2.dbi, WhoAmI, 'grandchild2');
+      txn.commit();
+    }
+
+    // drop child
+    // expect(child.drop()).equals('ok');
+    // expectForkNotExist(child.forkId);
+    child.drop();
+
+    // test if other forks are affected
+    {
+      const txn = env.beginTxn();
+      expect(txn.getString(parent.dbi, WhoAmI)).equals('parent');
+      expect(txn.getString(grandchild1.dbi, WhoAmI)).equals('grandchild1');
+      expect(txn.getString(grandchild2.dbi, WhoAmI)).equals('grandchild2');
+      txn.commit();
+    }
   });
 
 });

@@ -102,6 +102,11 @@ export function openForkDB(env: OpenedEnv) {
     txn.putObject(forkDB, key, fork);
   }
 
+  function delForkRecord(txn: Txn, forkId: number) {
+    const key = forkIdToKey(forkId);
+    txn.del(forkDB, key);
+  }
+
   function fork(txn: ExtendedTxn, parentID: number) {
     // allocate child ID
     let childID = parentID + 1;
@@ -157,6 +162,115 @@ export function openForkDB(env: OpenedEnv) {
 
   function loadForkDbi(forkId: number, txn?: Txn) {
     return env.openDbi({ name: forkIdToKey(forkId), txn });
+  }
+
+  function migrateFork(args: {
+    txn: ExtendedTxn;
+    selfForkId: number;
+    selfForkRecord?: ForkRecord;
+    selfDbi?: Dbi;
+    selfKeys?: string[];
+    selfCost?: number;
+    childForkId: number;
+    childForkRecord?: ForkRecord;
+    childDbi?: Dbi;
+    childKeys?: string[];
+    childCost?: number;
+  }): 'self_to_child' | 'child_to_self' {
+    const { txn, selfForkId, childForkId } = args;
+
+    const selfForkRecord =
+      args.selfForkRecord || loadForkRecord(txn, selfForkId);
+    if (selfForkRecord === null) {
+      console.error(`selfForkRecord not found, forkId:`, selfForkId);
+      throw new Error('forkRecord not found');
+    }
+    const childForkRecord =
+      args.childForkRecord || loadForkRecord(txn, childForkId);
+    if (childForkRecord === null) {
+      console.error(`childForkRecord not found, forkId:`, childForkId);
+      throw new Error('forkRecord not found');
+    }
+
+    const selfDbi = args.selfDbi || loadForkDbi(selfForkId, txn);
+    const childDbi = args.childDbi || loadForkDbi(childForkId, txn);
+
+    const selfKeys = args.selfKeys || txn.keys(selfDbi);
+    const childKeys = args.childKeys || txn.keys(childDbi);
+
+    // cost if copy from 'child' to 'self'
+    const selfCost =
+      args.selfCost || childKeys.length + childForkRecord.childIDs.length;
+    // cost if copy from 'self' to 'child'
+    const childCost = args.childCost || selfKeys.length + 1;
+
+    if (selfCost > childCost) {
+      // copy from 'child' to 'self'
+      const selfKeySet = new Set(selfKeys);
+      childKeys.forEach(key => {
+        const value = txn.getBinary(childDbi, key);
+        if (value === null) {
+          if (selfKeySet.has(key)) {
+            txn.del(selfDbi, key);
+          }
+        } else {
+          txn.putBinary(selfDbi, key, value);
+        }
+      });
+      // update the parent ref on the grandchildren to self
+      for (const grandChildForkId of childForkRecord.childIDs) {
+        const grandChildForkRecord = loadForkRecord(txn, grandChildForkId);
+        if (grandChildForkRecord === null) {
+          console.error(
+            `grandChildForkRecord not found, forkId:`,
+            grandChildForkId,
+          );
+          throw new Error('forkRecord not found');
+        }
+        grandChildForkRecord.parentID = selfForkId;
+        saveForkRecord(txn, grandChildForkId, grandChildForkRecord);
+      }
+      // delete child
+      childDbi.drop({ txn });
+      return 'child_to_self';
+    } else {
+      // copy from 'self' to 'child'
+      const childKeySet = new Set(childKeys);
+      selfKeys.forEach(key => {
+        if (childKeySet.has(key)) {
+          // child override self value
+          return;
+        }
+        const value = txn.getBinary(selfDbi, key);
+        if (value === null) {
+          if (childKeySet.has(key)) {
+            txn.del(childDbi, key);
+          }
+        } else {
+          txn.putBinary(childDbi, key, value);
+        }
+      });
+      // update the child ref on the parent to child
+      const parentForkId = selfForkRecord.parentID;
+      if (parentForkId !== 0) {
+        // it really has parent
+        const parentForkRecord = loadForkRecord(txn, parentForkId);
+        if (parentForkRecord === null) {
+          console.error(`parentForkRecord not found, forkId:`, parentForkId);
+          throw new Error('forkRecord not found');
+        }
+        const { childIDs } = parentForkRecord;
+        for (let i = 0; i < childIDs.length; i++) {
+          if (childIDs[i] === selfForkId) {
+            childIDs[i] = childForkId;
+          }
+        }
+        saveForkRecord(txn, parentForkId, parentForkRecord);
+      }
+      // delete self
+      selfDbi.drop({ txn });
+      return 'self_to_child';
+    }
   }
 
   function loadFork(forkId: number, dbi_or_txn?: Dbi | Txn): Fork {
@@ -292,28 +406,43 @@ export function openForkDB(env: OpenedEnv) {
             if (fork === null) {
               return 'not_exist';
             }
-            console.log({ forkId, '# child': fork.childIDs.length });
+            console.log({
+              forkId,
+              '# child': fork.childIDs.length,
+            });
 
-            function injectDrop() {
-              const commit = txn.commit.bind(txn);
-              txn.commit = () => {
-                commit();
-                dbi.drop();
-              };
+            function dropFork(fork: { forkId: number; dbi: Dbi }) {
+              delForkRecord(txn, fork.forkId);
+              fork.dbi.drop({ txn });
             }
 
             // if no child, delete directly;
             if (fork.childIDs.length === 0) {
-              injectDrop();
+              dropFork({ forkId, dbi });
               return 'ok';
             }
 
             // if only one child, merge into child;
             if (fork.childIDs.length === 1) {
               // TODO
-              const childForkId = fork.childIDs[0]!;
-              const child = loadFork(childForkId, txn);
-              env;
+              const res = migrateFork({
+                txn,
+                selfForkId: forkId,
+                selfDbi: dbi,
+                childForkId: fork.childIDs[0],
+              });
+              switch (res) {
+                case 'self_to_child':
+                case 'child_to_self':
+                  return 'ok';
+                default:
+                  console.error('failed to migrate fork, result:', res);
+                  if ((res as any) instanceof Error) {
+                    throw res;
+                  } else {
+                    throw new Error(res);
+                  }
+              }
             }
             // if multiple child, keep the fork, but mark for delete
             // TODO
