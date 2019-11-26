@@ -6,7 +6,6 @@ import {
   KeyType,
   newCursor,
   OpenedEnv,
-  ReadonlyTxn,
   Txn,
 } from 'typestub-node-lmdb';
 
@@ -158,11 +157,11 @@ export function openForkDB(env: OpenedEnv) {
       throw new Error(`fork record '${childId}' not found`);
     }
     const parentId = child.parentID;
-    return loadFork(parentId, (txn as ReadonlyTxn) as Txn);
+    return loadFork(parentId);
   }
 
-  function loadForkDbi(forkId: number, txn?: Txn) {
-    return env.openDbi({ name: forkIdToKey(forkId), txn });
+  function loadForkDbi(forkId: number) {
+    return env.openDbi({ name: forkIdToKey(forkId) });
   }
 
   function migrateFork(args: {
@@ -193,8 +192,8 @@ export function openForkDB(env: OpenedEnv) {
       throw new Error('forkRecord not found');
     }
 
-    const selfDbi = args.selfDbi || loadForkDbi(selfForkId, txn);
-    const childDbi = args.childDbi || loadForkDbi(childForkId, txn);
+    const selfDbi = args.selfDbi || loadForkDbi(selfForkId);
+    const childDbi = args.childDbi || loadForkDbi(childForkId);
 
     const selfKeys = args.selfKeys || txn.keys(selfDbi);
     const childKeys = args.childKeys || txn.keys(childDbi);
@@ -322,17 +321,8 @@ export function openForkDB(env: OpenedEnv) {
     }
   }
 
-  function loadFork(forkId: number, dbi_or_txn?: Dbi | Txn): Fork {
-    const dbi: Dbi = ((): Dbi => {
-      if (!dbi_or_txn) {
-        return loadForkDbi(forkId);
-      }
-      const txn = dbi_or_txn as Txn;
-      if (!!txn.putString) {
-        return loadForkDbi(forkId, txn);
-      }
-      return dbi_or_txn as Dbi;
-    })();
+  function loadFork(forkId: number, _dbi?: Dbi): Fork {
+    const dbi: Dbi = _dbi || loadForkDbi(forkId);
 
     function wrapTxn(txn: ExtendedTxn): ForkTxn;
     function wrapTxn(txn: ExtendedReadonlyTxn): ReadonlyForkTxn;
@@ -398,10 +388,7 @@ export function openForkDB(env: OpenedEnv) {
               forkId = forkId_or_fork.forkId;
               dbi = forkId_or_fork.dbi;
             }
-            const that = loadFork(
-              forkId,
-              dbi || ((txn as ReadonlyTxn) as Txn),
-            ).wrapTxn(txn);
+            const that = loadFork(forkId, dbi).wrapTxn(txn);
             Object.assign(self, that);
           },
           forEachKey(f: (key: Key) => void): void {
@@ -573,7 +560,7 @@ export function openForkDB(env: OpenedEnv) {
   function dropFork(txn: ExtendedTxn, forkId: number): DropResult {
     let fork: Fork;
     try {
-      fork = loadFork(forkId, txn);
+      fork = loadFork(forkId);
     } catch (e) {
       if (
         e instanceof Error &&
