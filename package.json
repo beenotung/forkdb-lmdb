@@ -1,6 +1,6 @@
 {
   "name": "forkdb-lmdb",
-  "version": "0.5.3",
+  "version": "1.0.0",
   "description": "Object-prototype-like abstraction over lmdb.",
   "keywords": [
     "forkdb",
